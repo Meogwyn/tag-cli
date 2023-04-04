@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 import dotenv
 import re
 import datetime
@@ -8,6 +9,8 @@ import os
 from . import globs
 from . import uinput
 from . import util
+from . import ipccli
+from . import ipcparser
 
 util.tclog_add_file_sects(__file__, ["MAIN"])
 
@@ -54,26 +57,73 @@ def set_globs():
     if "TC_LOGFILE" in globs.Globs["env"]:
         globs.Globs["logfile"] = open(globs.Globs["env"]["TC_LOGFILE"], globs.Globs["logfile_mode"])
 
+    if "TAG_TCP_HOST" in globs.Globs["env"]:
+        globs.Globs["tcp_host"] = globs.Globs["env"]["TAG_TCP_HOST"]
+    else:
+        globs.Globs["tcp_host"] = "localhost" 
+
+    if "TAG_TCP_PORT" in globs.Globs["env"]:
+        globs.Globs["tcp_port"] = int(globs.Globs["env"]["TAG_TCP_PORT"])
+    else:
+        globs.Globs["tcp_port"] = 15324
+
 async def pootask():
     locsects = util.logsects[__file__]
     while True:
         util.tclog('poo', 0, locsects)
         await asyncio.sleep(1)
 
+async def tag_task():
+    #globs.Globs["tag_proc"] = 
+    locsects = ["TTASK"]
+    try:
+        util.tclog("tag task starting", 1000, locsects)
+        proc = await asyncio.create_subprocess_shell("python -m tag.tag", stdout = None)
+        await proc.wait()
+    except asyncio.CancelledError as e:
+        proc.send_signal(signal.SIGINT)
+        util.tclog("tag task exiting", 1000, locsects)
+        raise
+
+
+
 async def main():
+    global Globs
     #no logging before these two
     load_envvars()
     set_globs()
 
     util.tclog(f"[START {datetime.datetime.now()}]", depth = 1)
 
-    signal.signal(signal.SIGINT, util.sigint_hdl)
 
     util.tclog(f"env vars:{globs.Globs['env']}", sects = util.logsects[__file__], depth = 5000)
-#    asyncio.gather(uinput.uinp_task(), pootask())
-    await asyncio.gather(uinput.uinp_task())
+
+    sys.path.append("tag/")
+    uinp_tsk = asyncio.create_task(uinput.uinp_task())
+    parse_tsk = asyncio.create_task(ipcparser.parse_task())
+    ipc_tsk = asyncio.create_task(ipccli.ipc_task())
+    tag_tsk = asyncio.create_task(tag_task())
+
+    globs.Globs["tasks"] += [uinp_tsk, parse_tsk, ipc_tsk, tag_tsk]
+    if sys.platform.startswith("linux"):
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGINT, util.sigint_hdl)
+    for i in globs.Globs["tasks"]:
+        print(f'CREATED TASK {i}')
+    try:
+        await asyncio.gather(uinp_tsk, 
+                             parse_tsk, 
+                             ipc_tsk,
+                             tag_tsk)
+    except asyncio.CancelledError as e:
+        print(f"weird CancelledError: {repr(e)}, tb: {traceback.format_exc()}")
+    except SystemExit as e:
+        print(f"sysexit: {repr(e)}")
     
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except SystemExit as e:
+        pass

@@ -1,9 +1,16 @@
 import sys
+import os
+if sys.platform.startswith("linux"):
+    import termios
+    import tty
 import asyncio
+import signal
 from . import globs
+from . import util
 from . import uinput # It would be better if this wasn't this way but eh
 
 logsects = {}
+cl_tasks = []
 
 def tclog_add_file_sects(file, sects):
     global logsects
@@ -64,14 +71,22 @@ def tclog(rawstr, depth=5000, sects=None):
         globs.Globs["logfile"].write(logstr + "\n")
     if globs.Globs["logstderr"]:
         uinput.prnttext(logstr)
-#        asyncio.create_task(aioconsole.aprint(logstr, use_stderr = True))
 
-def sigint_hdl(sig, frame):
-    print('EXIT')
+def sigint_hdl(sig = None, frame = None):
+    os.write(sys.stdout.fileno(), b'CLI_EXIT\n')
     clean_exit(0)
 def panic(err):
     if err:
         print("PANIC: " + err)
         clean_exit(-1)
+async def _clean_exit(code):
+    try:
+        globs.Globs["tag_proc"].send_signal(signal.SIGINT)
+    except Exception:
+        pass
+    for tsk in globs.Globs["tasks"]:
+        tsk.cancel()
+    if sys.platform.startswith("linux"):
+        tty.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, globs.Globs["old_attr"])
 def clean_exit(code):
-    exit(code)
+    asyncio.create_task(_clean_exit(code))
