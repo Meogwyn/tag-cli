@@ -52,13 +52,29 @@ def parse_ipc_msg(msg):
             case "get_pkg_config":
                 util.tclog(f"loaded pc: {json.dumps(msg['data'], indent = 4)}", 0, locsects)
                 cmds.setpc(msg["data"])
-
             case "all_pkg_configs":
-                util.tclog(f"saved pcs: \n{json.dumps(msg['data'], indent = 4)}", 0, locsects)
+                # printed data includes only name, id
+                outstr = "saved pcs: \n"
+                for i in msg['data']:
+                    outstr += "----------------\n"
+                    outstr += f"name: '{i['name']}' id: '{i['id']}'\n"
+                outstr += "----------------\n"
+                util.tclog(outstr, 0, locsects)
             case "all_runs":
-                util.tclog(f"saved pcs: \n{json.dumps(msg['data'], indent = 4)}", 0, locsects)
+                outstr = "saved runs: \n"
+                for i in msg['data']:
+                    outstr += "----------------\n"
+                    outstr += f"pc name: '{i['pkg']['name']}' pc id: '{i['pkg']['id']}' run id: '{i['run_id']}'\n"
+                outstr += "----------------\n"
+                util.tclog(outstr, 0, locsects)
             case "status":
                 util.tclog(f"TAG status dump: {json.dumps(msg['data'], indent = 4)}", 0, locsects)
+            case "start":
+                util.tclog(f"started on pc (id: '{msg['data']['id']}', run_id: '{msg['data']['run_id']}')", 0, locsects)
+            case "pkg_success":
+                util.tclog(f"pc '{msg['data']['name']}' (id: '{msg['data']['id']}', run_id '{msg['data']['run_id']}') SUCCESSFUL", 0, locsects)
+            case "pkg_failure":
+                util.tclog(f"pc '{msg['err']['name']}' (id: '{msg['err']['id']}', run_id '{msg['err']['run_id']}') FAILED (ERROR: {msg['err']['desc']})", 0, locsects)
             case _:
                 if "err" in msg:
                     pass

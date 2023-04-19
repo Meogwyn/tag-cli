@@ -76,5 +76,5 @@ async def rdr_task(rdr):
             wtr_tsk.cancel()
             raise
         except asyncio.IncompleteReadError:
-            util.panic("unexpected EOF from TAG; possibly, the client should be restarted", 0, locsects)
+            util.panic("unexpected EOF from TAG; possibly, the client should be restarted")
 #            util.clean_exit(-1)

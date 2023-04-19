@@ -79,7 +79,8 @@ def cmd_initpc_fnc(*args):
         raise Exception("another pc is already loaded\nTIP: use clearpc to clear the worked-on pc (this may discard progress)")
 
     glob_pc = empty_pc()
-    util.tclog(f"current pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"pc initialized", 0, locsects)
 
 
 cmd_initpc_usage = ""
@@ -148,7 +149,8 @@ cmd_submit_desc = "submit pkg config to TAG"
 
 def empty_query():
     return {
-        "oai_config": {}
+        "oai_config": {},
+        "inp_cb_map": []
     }
 def cmd_addideas_fnc(*args):
     global glob_pc
@@ -159,13 +161,13 @@ def cmd_addideas_fnc(*args):
     if not len(args[0]) >= 1:
         raise Exception("no ideas specified")
     if not glob_pc:
-        raise Exception("pc not initialized (used initpc)")
+        raise Exception("pc not initialized (use initpc or loadpc)")
     
     ideas = args[0]
 
     for i in ideas:
         glob_pc["ideas"].append(i)
-    util.tclog(f"added ideas to pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    util.tclog(f"added ideas to pc (use 'showideas' to see them)", 0, locsects)
 
 
 cmd_addideas_usage = "<idea> [<idea> ...]"
@@ -203,7 +205,7 @@ def cmd_addfiles_fnc(*args):
             raise Exception(f"ideas file path {file} doesn't exist")
         ideas = load_ideas_file(file)
         glob_pc["ideas"] += ideas
-    util.tclog(f"added ideas from idea files: {json.dumps(files, indent = 4)} to pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    util.tclog(f"added ideas from idea files (use 'showideas' to see them)", 0, locsects)
 
 
 cmd_addfiles_usage = "<file> [<file> ...]"
@@ -224,7 +226,8 @@ def cmd_addqueries_fnc(*args):
 
     for i in range(int(cnt)):
         glob_pc["queries"].append(empty_query())
-    util.tclog(f"added queries to pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"added queries to pc", 0, locsects)
 
 
 cmd_addqueries_usage = "<cnt>"
@@ -246,7 +249,8 @@ def cmd_qparam_fnc(*args):
         val = coerce_val(param, val, schemas.pkg_config_schema["properties"]["queries"]["items"]["properties"])
 
         glob_pc["queries"][int(idx)][param] = val
-        util.tclog(f"added param {param} with value {val} to query with idx {idx}: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+        showpc(glob_pc)
+        util.tclog(f"added param {param} with value {val} to query with idx {idx}", 0, locsects)
     except IndexError:
         raise KeyError(f"query with index {idx} doesn't exist yet (use addquery)")
 
@@ -269,7 +273,8 @@ def cmd_qoaiparam_fnc(*args):
 
     # TODO: add param verification
     glob_pc["queries"][int(idx)]["oai_config"][param] = val
-    util.tclog(f"added oai param {param} with value {val} to query with idx {idx}: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"added oai param {param} with value {val} to query with idx {idx}", 0, locsects)
 
 
 cmd_qoaiparam_usage = "<idx> <oaiparam> <val>"
@@ -281,6 +286,7 @@ def get_schem_sect(sect):
     match sect:
         case "pc":
             temp = dict(schemas.pkg_config_schema["properties"])
+            del temp["id"]
         case "pcoai":
             temp = dict(schemas.pkg_config_schema["properties"]["oai_config_gen"]["properties"])
         case "q":
@@ -297,6 +303,30 @@ def get_schem_sect(sect):
     for i in temp:
         if (temp[i]["type"] == "array") or (temp[i]["type"] == "object"):
             del out[i]
+    return out
+
+def get_req_sect(sect):
+    out = None
+    match sect:
+        case "pc":
+            out = list(schemas.pkg_config_schema["required"])
+            out.remove("oai_config_gen")
+            out.remove("queries")
+            out.remove("ideas")
+            out.remove("id")
+        case "pcoai":
+            out = list()
+        case "q":
+            out = list(schemas.pkg_config_schema["properties"]["queries"]["items"]["required"])
+            out.remove("oai_config")
+        case "qoai":
+            out = list()
+        case "incb":
+            out = list(schemas.pkg_config_schema["properties"]["queries"]["items"]["properties"]["inp_cb_map"]["required"])
+        case _:
+            raise Exception("section '{sect}' not found (run 'help params' or 'params' for help on this issue)")
+
+
     return out
 
 def set_pc_param(val, param, sect, idx = None):
@@ -371,8 +401,9 @@ section {sect}")
         set_pc_param(val, param, sect)
     else:
         set_pc_param(val, param, sect, idx)
+    showpc(glob_pc)
     util.tclog(f"successfully set parameter {param} for in section {sect} to \
-value {val}: {json.dumps(glob_pc, indent = 4)}", 5000, locsects)
+value {val}", 5000, locsects)
 
 
 cmd_setparam_usage = "<section>('pc' | 'pcoai' | 'q' | 'qoai' | 'incb') [<index>] <param> <val>"
@@ -392,58 +423,37 @@ def cmd_pcoaiparam_fnc(*args):
     param, val = args[0]
 
     glob_pc["oai_config_gen"][param] = val
-    util.tclog(f"added oai param to pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"added oai param to pc", 0, locsects)
 
 
 cmd_pcoaiparam_usage = "<oaiparam> <val>"
 cmd_pcoaiparam_desc = "add oai param _oaiparam_ to a pending package configuration"
 
 class prms_list():
-    def __init__(self, sect, s_lst, r_lst):
-        self.sect = str(sect)
+    def __init__(self, sect, s_dct, r_lst):
+        self.sects = list(str(sect))
         self.s_lst = list()
         self.r_lst = list()
 
-        for i in s_lst:
-            util.tclog(f"WEIRD SHIT:{i}, {s_lst}")
-            if (i["type"] == "object") or (i["type"] == "array"):
+        for i in s_dct:
+            if (s_dct[i]["type"] == "object") or (s_dct[i]["type"] == "array"):
                 continue
             self.s_lst.append(i)
         for i in r_lst:
-            if (i["type"] == "object") or (i["type"] == "array"):
-                continue
             self.r_lst.append(i)
+    def __iadd__(self, val):
+        self.sects += val.sects
+        self.s_lst += val.s_lst
+        self.r_lst += val.r_lst
+        return self
 """
 Following two funcs return objects of following form:
 """
 def get_prms(sect = None):
     out = None
     
-    match sect:
-        case "pc":
-            out = prms_list(sect, 
-                            list(schemas.pkg_config_schema["properties"]),
-                            list(schemas.pkg_config_schema["required"]))
-        case "pcoai":
-            out = prms_list(sect, 
-                            list(schemas.pkg_config_schema["properties"]["oai_config_gen"]["properties"]),
-                            list())
-        case "q":
-            out = prms_list(sect, 
-                            list(schemas.pkg_config_schema["properties"]["queries"]["items"]["properties"]),
-                            list(schemas.pkg_config_schema["properties"]["queries"]["items"]["required"]))
-        case "qoai":
-            out = prms_list(sect, 
-                            list(schemas.pkg_config_schema["properties"]["queries"]["items"]["properties"]["oai_config"]["properties"]),
-                            list())
-        case None:
-            out = list()
-            out += get_prms("pc")
-            out += get_prms("pcoai")
-            out += get_prms("q")
-            out += get_prms("qoai")
-        case _:
-            raise Exception("section {sect} not found")
+    out = prms_list(sect, get_schem_sect(sect), get_req_sect(sect))
 
     return out
 def cmd_params_fnc(*args):
@@ -465,14 +475,19 @@ def cmd_params_fnc(*args):
         prms = get_prms(sect)
     else:
         outstr = f"all parameters:\n"
-        prms = get_prms()
+        cmd_params_fnc(["pc"])
+        cmd_params_fnc(["pcoai"])
+        cmd_params_fnc(["q"])
+        cmd_params_fnc(["qoai"])
+        return
 
-    outstr += "supported:\n"
+    outstr += "SUPPORTED:\n"
     for i in prms.s_lst:
         outstr += f"{i}\n"
-    outstr += "required\n"
-    for i in prms.r_lst:
-        outstr += f"{i}\n"
+    if len(prms.r_lst):
+        outstr += "\nREQUIRED:\n"
+        for i in prms.r_lst:
+            outstr += f"{i}\n"
 
     util.tclog(outstr, 0, locsects)
     
@@ -492,7 +507,7 @@ it is run, and query B takes the output of query A and inserts it to the end of 
 the prompt. Now suppose for some reason query A gives its output as a \
 newline-terminated list, but that messes somehow with the responses from query B \
 \n\nWhat we could do when faced with such a problem is define a function in \
-'tag/tag/procedures.py' (see the example function below) and then assign it as \
+'tag/tag/proc.py' (see the example function below) and then assign it as \
 an input callback for query B. Here's how that would look like in practice:\n\n\
 1. Define a function in 'tag/tag/procedures.py':\n\ndef cool_procedure(inp):\n   return inp.replace('\\n', ',')\n\
 \n2. With the pc loaded, assign that callback to the input \n\n'pcparam incb 1 0 \
@@ -538,7 +553,8 @@ def cmd_clrparam_fnc(*args):
                 del glob_pc["queries"][idx][oai_config][param]
             case _:
                 raise Exception(f"invalid section {sect}")
-        util.tclog(f"cleared param '{param}' from pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+        showpc(glob_pc)
+        util.tclog(f"cleared param '{param}' from pc", 0, locsects)
     except KeyError as e:
         util.tclog(f"param {param} doesn't exist in section {sect}", 0, locsects)
 
@@ -553,8 +569,75 @@ cmd_quit_usage = ""
 cmd_quit_desc = "quit TAG-CLI"
 
 def showpc(pc):
-    outstr = "'pc' params:\n"
-    util.tclog(f"pending pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    global glob_pc
+    locsects = list(util.logsects[__file__])
+    sects = ["pc", "pcoai", "q", "qoai"]
+    obj = None
+
+    outstr = "LOADED PC PARAMS:\n"
+
+    sect = "pc"
+
+    tempprms = get_prms(sect)
+    outstr += f"\nSECT: {sect}\n"
+    for prm in tempprms.s_lst:
+        if prm in glob_pc:
+            outstr += f"{prm}: {glob_pc[prm]}\n"
+
+    outstr += f"END SECT: {sect}\n\n"
+
+    sect = "pcoai"
+
+    tempprms = get_prms(sect)
+    outstr += f"SECT: {sect}\n"
+    for prm in tempprms.s_lst:
+        if prm in glob_pc['oai_config_gen']:
+            outstr += f"{prm}: {glob_pc['oai_config_gen'][prm]}\n"
+    outstr += f"END SECT: {sect}\n\n"
+
+    outstr += "QUERIES:\n"
+
+    for idx in range(len(glob_pc['queries'])):
+        outstr += "----------------\n"
+
+        sect = "q"
+
+        tempprms = get_prms(sect)
+        outstr += f"IDX: {idx}\n"
+        outstr += f"SECT: {sect}\n"
+        for prm in tempprms.s_lst:
+            if prm in glob_pc["queries"][idx]:
+                outstr += f"{prm}: {glob_pc['queries'][idx][prm]}\n"
+
+        outstr += f"END SECT: {sect}\n\n"
+        if len(glob_pc["queries"][idx]["oai_config"]):
+            sect = "qoai"
+
+            tempprms = get_prms(sect)
+            outstr += f"SECT: {sect}\n"
+            for prm in tempprms.s_lst:
+                if prm in glob_pc["queries"][idx]:
+                    outstr += f"{prm}: {glob_pc['queries'][idx]['oai_config'][prm]}\n"
+
+        # cbs
+        if len(glob_pc["queries"][idx]["inp_cb_map"]):
+            sect = "icbs"
+            outstr += f"SECT: {sect}\n"
+            for cbidx in range(len(glob_pc["queries"][idx]["inp_cb_map"])):
+                outstr += "****\n"
+                outstr += f"input idx: {glob_pc['queries'][idx]['inp_cb_map'][cbidx]['idx']}\n"
+                outstr += f"callback name: {glob_pc['queries'][idx]['inp_cb_map'][cbidx]['cb_name']}\n"
+            outstr += "****\n"
+            outstr += f"END SECT: {sect}\n\n"
+
+
+    outstr += "----------------\n"
+
+    outstr += "END QUERIES\n"
+
+
+    util.tclog(outstr, 0, locsects)
+
 
 def cmd_showpc_fnc(*args):
     global glob_pc
@@ -564,6 +647,7 @@ def cmd_showpc_fnc(*args):
         raise Exception("pc not initialized (used initpc)")
 
     showpc(glob_pc)
+    util.tclog(f"TIP: use 'showideas' to see currently loaded ideas", 0, locsects)
 
 
 cmd_showpc_usage = ""
@@ -834,7 +918,8 @@ def cmd_pcoaiparam_fnc(*args):
     param, val = args[0]
 
     glob_pc["oai_config_gen"][param] = val
-    util.tclog(f"added oai param to pc: {json.dumps(glob_pc, indent = 4)}", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"added oai param to pc", 0, locsects)
 
 
 cmd_pcoaiparam_usage = "<oaiparam> <val>"
@@ -1002,10 +1087,142 @@ def cmd_default_fnc():
     cmd_setparam_fnc(["q", 14, "prompt", "Write an introduction for the following article: $1"])
     cmd_setparam_fnc(["q", 14, "out_header", "Introduction"])
 
-    util.tclog(f"default pc initialized: {json.dumps(glob_pc, indent = 4)}\n\n(remember to set the required parameters (see \"params\")))", 0, locsects)
+    showpc(glob_pc)
+    util.tclog(f"default pc initialized\n\n(remember to set the required parameters (see \"params\")))", 0, locsects)
 
 cmd_default_usage = ""
 cmd_default_desc = "generate a default pc"
+
+def cmd_showideas_fnc(*args):
+    locsects = list(util.logsects[__file__])
+    if not glob_pc:
+        raise Exception("pc not initialized (used initpc)")
+
+    outstr = "IDEAS FOR CURRENTLY LOADED PC:\n"
+    for i in glob_pc["ideas"]:
+        outstr += f"{i}\n"
+    util.tclog(outstr, 0, locsects)
+
+
+cmd_showideas_usage = ""
+cmd_showideas_desc = "show ALL currently added ideas"
+
+def cmd_seticb_fnc(*args):
+    global glob_pc
+    locsects = list(util.logsects[__file__])
+
+    if not len(args):
+        raise Exception("invalid number of args")
+    if not len(args[0]) == 3:
+        raise Exception("invalid number of args")
+    if not glob_pc:
+        raise Exception("pc not initialized (used initpc)")
+    qidx, inp_qidx, cb_name = args[0]
+
+    inp_qidx = int(inp_qidx)
+    qidx = int(qidx)
+
+    try: #fingers crossed
+        cmd_clricb_fnc([qidx, inp_qidx])
+    except Exception as e:
+        pass
+
+    temp = {"idx": inp_qidx, "cb_name":cb_name}
+    glob_pc["queries"][qidx]["inp_cb_map"].append(temp)
+    showpc(glob_pc)
+    util.tclog(f"added input callback ({cb_name}) to query ({qidx}) for input from query ({inp_qidx})", 0, locsects)
+
+
+
+cmd_seticb_usage = "<qidx> <inp_qidx> <cb_name>"
+cmd_seticb_desc = "add input callback (cb) <cb_name> to query with idx <qidx> which \
+will be applied to inputs from query <inp_qidx>\nNOTE: you can specify 1 cb per \
+input"
+
+def cmd_setocb_fnc(*args):
+    global glob_pc
+    locsects = list(util.logsects[__file__])
+    if not len(args):
+        raise Exception("invalid number of args")
+    if not len(args[0]) == 2:
+        raise Exception("invalid number of args")
+    if not glob_pc:
+        raise Exception("pc not initialized (used initpc)")
+    qidx, cb_name = args[0]
+
+    qidx = int(qidx)
+
+    glob_pc["queries"][qidx]["out_cb"] = cb_name
+
+    showpc(glob_pc)
+    util.tclog(f"added output callback ({cb_name}) to query ({qidx})", 0, locsects)
+
+
+
+cmd_setocb_usage = "<qidx> <cb_name>"
+cmd_setocb_desc = "set the output callback <cb_name> for query with index <qidx>\
+, which will be applied to its output"
+
+def cmd_clrocb_fnc(*args):
+    global glob_pc
+    locsects = list(util.logsects[__file__])
+    if not len(args):
+        raise Exception("invalid number of args")
+    if len(args[0]) != 1:
+        raise Exception("invalid number of args")
+    if not glob_pc:
+        raise Exception("pc not initialized (used initpc)")
+    qidx = args[0][0]
+
+    qidx = int(qidx)
+
+    del glob_pc["queries"][qidx]["out_cb"]
+
+    showpc(glob_pc)
+    util.tclog(f"cleared out_cb for loaded pc", 0, locsects)
+
+
+
+cmd_clrocb_usage = "<qidx>"
+cmd_clrocb_desc = "Clear output callback for query with idx <qidx> "
+
+def cmd_clricb_fnc(*args):
+    global glob_pc
+    locsects = list(util.logsects[__file__])
+    temp = None
+    found = False
+
+
+    if not len(args):
+        raise Exception("invalid number of args")
+    if len(args[0]) != 2:
+        raise Exception("invalid number of args")
+    if not glob_pc:
+        raise Exception("pc not initialized (used initpc)")
+    qidx, inp_qidx = args[0]
+
+    qidx = int(qidx)
+    inp_qidx = int(inp_qidx)
+
+    cbmap = glob_pc["queries"][qidx]["inp_cb_map"]
+
+    for cb in cbmap:
+        if cb["idx"] == inp_qidx:
+            cbmap.remove(cb)
+            found = True
+    if found == False:
+        raise Exception(f"icb for input from query {inp_qidx} not found in query \
+with idx {qidx}")
+
+    showpc(glob_pc)
+    util.tclog(f"cleared input callback for query ({qidx}) for input from query \
+({inp_qidx})", 0, locsects)
+
+
+
+cmd_clricb_usage = "<qidx> <inp_idx>"
+cmd_clricb_desc = "For query with idx <qidx>, clear the input callback applied \
+to input from query <inp_qidx>"
 
 
 
@@ -1176,4 +1393,34 @@ cmds.append({
     "func": cmd_default_fnc, 
     "usage": cmd_default_usage, 
     "desc": cmd_default_desc,
+})
+cmds.append({
+    "name": "showideas", 
+    "func": cmd_showideas_fnc, 
+    "usage": cmd_showideas_usage, 
+    "desc": cmd_showideas_desc,
+})
+cmds.append({
+    "name": "seticb", 
+    "func": cmd_seticb_fnc, 
+    "usage": cmd_seticb_usage, 
+    "desc": cmd_seticb_desc,
+})
+cmds.append({
+    "name": "setocb", 
+    "func": cmd_setocb_fnc, 
+    "usage": cmd_setocb_usage, 
+    "desc": cmd_setocb_desc,
+})
+cmds.append({
+    "name": "clrocb", 
+    "func": cmd_clrocb_fnc, 
+    "usage": cmd_clrocb_usage, 
+    "desc": cmd_clrocb_desc,
+})
+cmds.append({
+    "name": "clricb", 
+    "func": cmd_clricb_fnc, 
+    "usage": cmd_clricb_usage, 
+    "desc": cmd_clricb_desc,
 })

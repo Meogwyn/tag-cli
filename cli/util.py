@@ -11,6 +11,7 @@ from . import uinput # It would be better if this wasn't this way but eh
 
 logsects = {}
 cl_tasks = []
+exiting = False
 
 def tclog_add_file_sects(file, sects):
     global logsects
@@ -76,6 +77,8 @@ def sigint_hdl(sig = None, frame = None):
     os.write(sys.stdout.fileno(), b'CLI_EXIT\n')
     clean_exit(0)
 def panic(err):
+    if exiting:
+        return
     if err:
         print("PANIC: " + err)
         clean_exit(-1)
@@ -89,4 +92,9 @@ async def _clean_exit(code):
     if sys.platform.startswith("linux"):
         tty.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, globs.Globs["old_attr"])
 def clean_exit(code):
+    global exiting
+
+    if exiting:
+        return
+    exiting = True
     asyncio.create_task(_clean_exit(code))
